@@ -54,12 +54,17 @@ extern "C"
                               value given at command line.  */
     const char *log_filter_help; /**< @brief Program log category filter help
                                     description.  */
+    const char *use_vsock_help;   /**< @brief vsock flag help description */
+    int use_vsock_arg;            /**< @brief enable vsock flag.  */
+    char *use_vsock_orig;         /**< @brief vsock flag original value
+                                    given at command line.  */
 
     unsigned int help_given;       /**< @brief Whether help was given.  */
     unsigned int version_given;    /**< @brief Whether version was given.  */
     unsigned int address_given;    /**< @brief Whether address was given.  */
     unsigned int port_given;       /**< @brief Whether port was given.  */
     unsigned int log_filter_given; /**< @brief Whether log_filter was given. */
+    unsigned int use_vsock_given;  /**< @brief Whether use VSOCK rather than TCP. */
   };
 
   /** @brief The additional parameters to pass to parser functions */

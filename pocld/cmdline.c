@@ -37,6 +37,7 @@ const char *gengetopt_args_info_help[]
         "  -a, --address=STRING     Listen address",
         "  -p, --port=INT           Listen port",
         "  -v, --log_filter=STRING  Program log category filter",
+        "  -s, --vsock              Whether use VSOCK rather than TCP",
         0 };
 
 typedef enum
@@ -64,6 +65,7 @@ clear_given (struct gengetopt_args_info *args_info)
   args_info->address_given = 0;
   args_info->port_given = 0;
   args_info->log_filter_given = 0;
+  args_info->use_vsock_given = 0;
 }
 
 static void
@@ -75,6 +77,7 @@ clear_args (struct gengetopt_args_info *args_info)
   args_info->port_orig = NULL;
   args_info->log_filter_arg = NULL;
   args_info->log_filter_orig = NULL;
+  args_info->use_vsock_orig = NULL;
 }
 
 static void
@@ -86,6 +89,7 @@ init_args_info (struct gengetopt_args_info *args_info)
   args_info->address_help = gengetopt_args_info_help[2];
   args_info->port_help = gengetopt_args_info_help[3];
   args_info->log_filter_help = gengetopt_args_info_help[4];
+  args_info->use_vsock_help = gengetopt_args_info_help[5];
 }
 
 void
@@ -185,6 +189,7 @@ cmdline_parser_release (struct gengetopt_args_info *args_info)
   free_string_field (&(args_info->port_orig));
   free_string_field (&(args_info->log_filter_arg));
   free_string_field (&(args_info->log_filter_orig));
+  free_string_field (&(args_info->use_vsock_orig));
 
   clear_given (args_info);
 }
@@ -226,6 +231,8 @@ cmdline_parser_dump (FILE *outfile, struct gengetopt_args_info *args_info)
     write_into_file (outfile, "port", args_info->port_orig, 0);
   if (args_info->log_filter_given)
     write_into_file (outfile, "log_filter", args_info->log_filter_orig, 0);
+  if (args_info->use_vsock_given)
+    write_into_file (outfile, "vsock", args_info->use_vsock_orig, 0);
 
   i = EXIT_SUCCESS;
   return i;
@@ -1140,14 +1147,15 @@ cmdline_parser_internal (int argc, char **argv,
       static struct option long_options[]
           = { { "help", 0, NULL, 'h' },       { "version", 0, NULL, 'V' },
               { "address", 1, NULL, 'a' },    { "port", 1, NULL, 'p' },
-              { "log_filter", 1, NULL, 'v' }, { 0, 0, 0, 0 } };
+              { "log_filter", 1, NULL, 'v' }, { "vsock", 0, NULL, 's' },
+              { 0, 0, 0, 0 } };
 
       custom_optarg = optarg;
       custom_optind = optind;
       custom_opterr = opterr;
       custom_optopt = optopt;
 
-      c = custom_getopt_long (argc, argv, "hVa:p:v:", long_options,
+      c = custom_getopt_long (argc, argv, "hVa:p:v:s", long_options,
                               &option_index);
 
       optarg = custom_optarg;
@@ -1199,6 +1207,15 @@ cmdline_parser_internal (int argc, char **argv,
                           &(local_args_info.log_filter_given), optarg, 0, 0,
                           ARG_STRING, check_ambiguity, override, 0, 0,
                           "log_filter", 'v', additional_error))
+            goto failure;
+
+          break;
+        case 's':
+          if (update_arg ((void *)&(args_info->use_vsock_arg),
+                          &(args_info->use_vsock_orig), &(args_info->use_vsock_given),
+                          &(local_args_info.use_vsock_given), "1", 0, 0, ARG_INT,
+                          check_ambiguity, override, 0, 0, "vsock", 's',
+                          additional_error))
             goto failure;
 
           break;
