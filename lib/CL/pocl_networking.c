@@ -31,6 +31,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <sys/time.h>
+#include <limits.h>
 
 #include "pocl_debug.h"
 #include "pocl_networking.h"
@@ -168,5 +169,18 @@ pocl_remote_client_set_socket_options (int socket_fd, int bufsize, int is_fast)
       -1, "setsockopt(TCP_KEEPINTVL) returned errno: %i\n", errno);
 #endif
 
+  return 0;
+}
+
+int
+pocl_parse_cid(const char* str, unsigned int* cid) {
+  char* endptr;
+  unsigned long t = strtoul(str+6, &endptr, 10);
+
+  if ((t > UINT_MAX) || (t == 0 && errno == EINVAL) || *endptr != '\0') {
+    return -EINVAL;
+  }
+
+  *cid = t;
   return 0;
 }

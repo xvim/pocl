@@ -41,6 +41,8 @@
 #include <sys/ioctl.h>
 #include <sys/resource.h>
 #include <sys/time.h>
+#include <linux/version.h>
+#include <linux/vm_sockets.h>
 #endif
 
 #include "pocl_debug.h"
@@ -88,6 +90,54 @@ in_addr_t find_default_ip_address() {
 #endif
 
   return listen_addr.s_addr;
+}
+
+int pocl_vsock_sockaddr(const char *cid_str, int port, struct sockaddr *sa, socklen_t *len)
+{
+	if(sa == NULL || len == NULL)
+    return -1;
+
+  char *end = NULL;
+	int sibling = 0;
+	long cid;
+  struct sockaddr_vm *svm = (struct sockaddr_vm *)sa;
+
+	if (cid_str == NULL) {
+		*len = sizeof(*svm);
+		memset(svm, 0, *len);
+		svm->svm_family = AF_VSOCK;
+		svm->svm_cid = VMADDR_CID_ANY;
+		svm->svm_port = port;
+
+    return 0;
+	}
+
+	/*
+	 * Connection to a sibling VM
+	 * cid_str is of the form "s<cid>"
+	*/
+	if (cid_str[0] == 's') {
+#if LINUX_VERSION_CODE > KERNEL_VERSION(5,11,0)
+		sibling = 1;
+#endif
+	}
+
+	cid = sibling ? strtol(cid_str+1, &end, 10) : strtol(cid_str, &end, 10);
+	if (cid_str != end && *end == '\0') {
+		*len = sizeof(*svm);
+		memset(svm, 0, *len);
+		svm->svm_family = AF_VSOCK;
+		svm->svm_cid = cid;
+		svm->svm_port = port;
+#if LINUX_VERSION_CODE > KERNEL_VERSION(5,11,0)
+		if (sibling) {
+			svm->svm_flags = VMADDR_FLAG_TO_HOST;
+		}
+#endif
+
+		return 0;
+	}
+  return -1;
 }
 
 int main(int argc, char *argv[]) {
@@ -140,52 +190,64 @@ int main(int argc, char *argv[]) {
   /* NOTE: struct sockaddr does NOT have enough space for all address types */
   struct sockaddr_storage base_addr = {};
   socklen_t base_addrlen;
-  if (ai.address_arg) {
-    addrinfo *resolved_address =
-        pocl_resolve_address(ai.address_arg, listen_ports.command, &error);
-    if (!error) {
-      /* Unfortunately getaddrinfo does not guarantee that the returned
-       * addresses would actually WORK. For example misconfigured IPv4-only
-       * setups sometimes return IPv6 addresses that are not bindable. As a
-       * workaround, iterate over the returned addresses until one is found that
-       * works. */
-      bool found_bindable_address = false;
-      std::vector<int> bind_errors;
-      for (addrinfo *ai = resolved_address;
-           ai != nullptr && !found_bindable_address; ai = ai->ai_next) {
-        memcpy(&base_addr, resolved_address->ai_addr,
-               resolved_address->ai_addrlen);
-        base_addrlen = resolved_address->ai_addrlen;
-        int tmp = socket(ai->ai_family, SOCK_STREAM, IPPROTO_TCP);
-        if (!tmp)
-          continue;
-        error = bind(tmp, ai->ai_addr, ai->ai_addrlen);
-        if (!error)
-          found_bindable_address = true;
-        else
-          bind_errors.push_back(errno);
-        close(tmp);
-      }
-      freeaddrinfo(resolved_address);
-      if (!found_bindable_address) {
-        POCL_MSG_ERR("Requested listen address %s did not resolve to any "
-                     "bindable address:\n",
-                     ai.address_arg);
-        int idx = 0;
-        for (int e : bind_errors)
-          POCL_MSG_ERR("resolved address %d: %s\n", idx++, strerror(e));
+
+  if (ai.use_vsock_arg != 1) {
+    if (ai.address_arg) {
+      addrinfo *resolved_address =
+          pocl_resolve_address(ai.address_arg, listen_ports.command, &error);
+      if (!error) {
+        /* Unfortunately getaddrinfo does not guarantee that the returned
+        * addresses would actually WORK. For example misconfigured IPv4-only
+        * setups sometimes return IPv6 addresses that are not bindable. As a
+        * workaround, iterate over the returned addresses until one is found that
+        * works. */
+        bool found_bindable_address = false;
+        std::vector<int> bind_errors;
+        for (addrinfo *ai = resolved_address;
+            ai != nullptr && !found_bindable_address; ai = ai->ai_next) {
+          memcpy(&base_addr, resolved_address->ai_addr,
+                resolved_address->ai_addrlen);
+          base_addrlen = resolved_address->ai_addrlen;
+          int tmp = socket(ai->ai_family, SOCK_STREAM, IPPROTO_TCP);
+          if (!tmp)
+            continue;
+          error = bind(tmp, ai->ai_addr, ai->ai_addrlen);
+          if (!error)
+            found_bindable_address = true;
+          else
+            bind_errors.push_back(errno);
+          close(tmp);
+        }
+        freeaddrinfo(resolved_address);
+        if (!found_bindable_address) {
+          POCL_MSG_ERR("Requested listen address %s did not resolve to any "
+                      "bindable address:\n",
+                      ai.address_arg);
+          int idx = 0;
+          for (int e : bind_errors)
+            POCL_MSG_ERR("resolved address %d: %s\n", idx++, strerror(e));
+          return EXIT_FAILURE;
+        }
+      } else {
+        POCL_MSG_ERR("Failed to resolve listen address: %s\n",
+                    gai_strerror(error));
         return EXIT_FAILURE;
       }
     } else {
-      POCL_MSG_ERR("Failed to resolve listen address: %s\n",
-                   gai_strerror(error));
-      return EXIT_FAILURE;
+      struct sockaddr_in *fallback = (struct sockaddr_in *)&base_addr;
+      fallback->sin_family = AF_INET;
+      fallback->sin_addr.s_addr = find_default_ip_address();
+      base_addrlen = sizeof(struct sockaddr_in);
     }
   } else {
-    struct sockaddr_in *fallback = (struct sockaddr_in *)&base_addr;
-    fallback->sin_family = AF_INET;
-    fallback->sin_addr.s_addr = find_default_ip_address();
-    base_addrlen = sizeof(struct sockaddr_in);
+    struct sockaddr sa;
+
+    error = pocl_vsock_sockaddr(ai.address_arg, listen_ports.command, &sa, &base_addrlen);
+    if(error) {
+      POCL_MSG_ERR("Failed to resolve vsock cid\n");
+      return EXIT_FAILURE;
+    }
+    memcpy(&base_addr, &sa, base_addrlen);
   }
 
   PoclDaemon server;

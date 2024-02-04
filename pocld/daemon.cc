@@ -24,6 +24,7 @@
 #include <set>
 #include <sys/poll.h>
 #include <unistd.h>
+#include <linux/vm_sockets.h>
 
 #include "pocl_networking.h"
 #include "pocl_runtime_config.h"
@@ -183,7 +184,13 @@ PoclDaemon::~PoclDaemon() {
 int PoclDaemon::launch(struct sockaddr_storage &base_addr,
                        socklen_t base_addrlen, struct ServerPorts &ports) {
   listen_ports = {ports};
+  if (base_addr.ss_family == AF_VSOCK)
+    use_vsock = true;
+
   struct sockaddr_storage server_addr_command, server_addr_stream;
+  struct sockaddr_vm *server_vsock_command = (struct sockaddr_vm *)&server_addr_command;
+  struct sockaddr_vm *server_vsock_stream = (struct sockaddr_vm *)&server_addr_stream;
+
   memcpy(&server_addr_command, &base_addr, base_addrlen);
   if (server_addr_command.ss_family == AF_INET)
     ((struct sockaddr_in *)&server_addr_command)->sin_port =
@@ -191,12 +198,14 @@ int PoclDaemon::launch(struct sockaddr_storage &base_addr,
   else if (server_addr_command.ss_family == AF_INET6)
     ((struct sockaddr_in6 *)&server_addr_command)->sin6_port =
         htons(ports.command);
-  else {
+  else if(server_addr_command.ss_family == AF_VSOCK) {
+    server_vsock_command->svm_port = ports.command;
+  } else {
     POCL_MSG_ERR("SERVER: unsupported socket address family\n");
     return -1;
   }
   clients_listen_command_fd =
-      socket(server_addr_command.ss_family, SOCK_STREAM, IPPROTO_TCP);
+      socket(server_addr_command.ss_family, SOCK_STREAM, use_vsock ? 0 : IPPROTO_TCP);
   PERROR_CHECK((clients_listen_command_fd < 0), "command socket");
 
   memcpy(&server_addr_stream, &base_addr, base_addrlen);
@@ -205,12 +214,14 @@ int PoclDaemon::launch(struct sockaddr_storage &base_addr,
   else if (server_addr_stream.ss_family == AF_INET6)
     ((struct sockaddr_in6 *)&server_addr_stream)->sin6_port =
         htons(ports.stream);
-  else {
+  else if(server_addr_stream.ss_family == AF_VSOCK) {
+    server_vsock_stream->svm_port = ports.stream;
+  } else {
     POCL_MSG_ERR("SERVER: unsupported socket address family\n");
     return -1;
   }
   clients_listen_stream_fd =
-      socket(server_addr_stream.ss_family, SOCK_STREAM, IPPROTO_TCP);
+      socket(server_addr_stream.ss_family, SOCK_STREAM, use_vsock ? 0 : IPPROTO_TCP);
   PERROR_CHECK((clients_listen_stream_fd < 0), "stream socket");
 
   int one = 1;
@@ -227,52 +238,62 @@ int PoclDaemon::launch(struct sockaddr_storage &base_addr,
       (bind(clients_listen_command_fd, (struct sockaddr *)&server_addr_command,
             base_addrlen) < 0),
       "command bind");
-  pocl_remote_client_set_socket_options(clients_listen_command_fd, 4 * 1024, 1);
+  if (!use_vsock)  /* AF_VSOCK don't support TCP_NODELAY */
+    pocl_remote_client_set_socket_options(clients_listen_command_fd, 4 * 1024, 1);
   PERROR_CHECK((listen(clients_listen_command_fd, 10) < 0), "command listen");
 
   PERROR_CHECK((bind(clients_listen_stream_fd,
                      (struct sockaddr *)&server_addr_stream, base_addrlen) < 0),
                "stream bind");
-  pocl_remote_client_set_socket_options(clients_listen_stream_fd,
+  if (!use_vsock) /* AF_VSOCK don't support TCP_NODELAY */
+    pocl_remote_client_set_socket_options(clients_listen_stream_fd,
                                         4 * 1024 * 1024, 0);
   PERROR_CHECK((listen(clients_listen_stream_fd, 10) < 0), "stream listen");
 
   std::string addr_string =
       describe_sockaddr((struct sockaddr *)&base_addr, base_addrlen);
 
-  peer_listener_data.port = listen_ports.peer;
-#ifdef ENABLE_RDMA
-  peer_listener_data.peer_rdma_port = listen_ports.peer_rdma;
-  peer_listener_data.rdma_listener.reset(new RdmaListener);
-  client_rdma_event_th = std::move(std::thread(
-      listen_rdmacm_events<VirtualContextBase *>, rdma_listener.eventChannel(),
-      std::ref(cm_id_to_vctx), std::ref(cm_id_to_vctx_mutex)));
-  rdma_listener.listen(listen_ports.rdma);
-  pl_rdma_event_th = std::move(
-      std::thread(listen_rdmacm_events<VirtualContextBase *>,
-                  peer_listener_data.rdma_listener->eventChannel(),
-                  std::ref(peer_listener_data.peer_cm_id_to_vctx),
-                  std::ref(peer_listener_data.peer_cm_id_to_vctx_mutex)));
-#endif
-  peer_listener_th =
-      std::move(std::thread(listen_peers, (void *)&peer_listener_data));
-
   pid_t server_pid;
   server_pid = getpid();
 
-  POCL_MSG_PRINT_INFO(
-      "SERVER: PID %d Listening on command=%s:%d, stream=%s:%d, peers=%s:%d"
-#ifdef ENABLE_RDMA
-      ", peer_rdma=%s:%d, rdma=%s:%d"
-#endif
-      "\n",
-      (int)server_pid, addr_string.c_str(), listen_ports.command,
-      addr_string.c_str(), listen_ports.stream, "0.0.0.0", listen_ports.peer
-#ifdef ENABLE_RDMA
-      ,
-      "0.0.0.0", listen_ports.peer_rdma, "0.0.0.0", listen_ports.rdma
-#endif
-  );
+  if (base_addr.ss_family != AF_VSOCK) {
+    peer_listener_data.port = listen_ports.peer;
+  #ifdef ENABLE_RDMA
+    peer_listener_data.peer_rdma_port = listen_ports.peer_rdma;
+    peer_listener_data.rdma_listener.reset(new RdmaListener);
+    client_rdma_event_th = std::move(std::thread(
+        listen_rdmacm_events<VirtualContextBase *>, rdma_listener.eventChannel(),
+        std::ref(cm_id_to_vctx), std::ref(cm_id_to_vctx_mutex)));
+    rdma_listener.listen(listen_ports.rdma);
+    pl_rdma_event_th = std::move(
+        std::thread(listen_rdmacm_events<VirtualContextBase *>,
+                    peer_listener_data.rdma_listener->eventChannel(),
+                    std::ref(peer_listener_data.peer_cm_id_to_vctx),
+                    std::ref(peer_listener_data.peer_cm_id_to_vctx_mutex)));
+  #endif
+    peer_listener_th =
+        std::move(std::thread(listen_peers, (void *)&peer_listener_data));
+
+    POCL_MSG_PRINT_INFO(
+        "SERVER: PID %d Listening on command=%s:%d, stream=%s:%d, peers=%s:%d"
+  #ifdef ENABLE_RDMA
+        ", peer_rdma=%s:%d, rdma=%s:%d"
+  #endif
+        "\n",
+        (int)server_pid, addr_string.c_str(), listen_ports.command,
+        addr_string.c_str(), listen_ports.stream, "0.0.0.0", listen_ports.peer
+  #ifdef ENABLE_RDMA
+        ,
+        "0.0.0.0", listen_ports.peer_rdma, "0.0.0.0", listen_ports.rdma
+  #endif
+    );
+  } else {
+     POCL_MSG_PRINT_INFO(
+        "SERVER: PID %d Listening on command=%s:%d, stream=%s:%d"
+        "\n",
+        (int)server_pid, addr_string.c_str(), listen_ports.command,
+        addr_string.c_str(), listen_ports.stream);
+  }
 
   client_sockets_th =
       std::move(std::thread(&PoclDaemon::readAllClientSocketsThread, this));
@@ -444,7 +465,10 @@ void PoclDaemon::readAllClientSocketsThread() {
             hack = newfd;
             // open_client_fds.push_back(newfd);
             // fds_changed = true;
-            pocl_remote_client_set_socket_options(newfd, bufsize, 1);
+
+            //vsock don't support TCP_NODELAY
+            if (!use_vsock)
+              pocl_remote_client_set_socket_options(newfd, bufsize, 1);
             std::string client_address_string =
                 describe_sockaddr(&client_address, client_address_length);
             POCL_MSG_PRINT_INFO("Accepted client %s connection from %s\n",

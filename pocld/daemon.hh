@@ -117,6 +117,7 @@ private:
   /** Port numbers that the server is listening on */
   struct ServerPorts listen_ports;
   ExitHelper exit_helper;
+  bool use_vsock;
   std::unordered_map<std::string, VirtualContextBase *> client_contexts;
   std::unordered_map<std::string, std::thread> client_session_threads;
   std::thread client_sockets_th;

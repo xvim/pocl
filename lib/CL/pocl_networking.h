@@ -52,6 +52,7 @@ extern "C"
    */
   extern int pocl_remote_client_set_socket_options (int fd, int bufsize,
                                                     int is_fast);
+  extern int pocl_parse_cid(const char* str, unsigned int* cid);
 
 #ifdef __cplusplus
 }

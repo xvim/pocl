@@ -41,6 +41,7 @@
 #include <sys/uio.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include <linux/vm_sockets.h>
 
 #include "pocl_cl.h"
 #include "pocl_image_util.h"
@@ -538,46 +539,68 @@ pocl_network_connect (remote_server_data_t *data, int *fd, unsigned port,
   *fd = -1;
   unsigned addrlen = 0;
 
-#ifdef USE_UDS
+  if (strncmp(data->address, "vsock-", 6) == 0) {
+    unsigned int cid = 0;
+    int err = pocl_parse_cid(data->address, &cid);
+    if(err != 0)
+      return err;
 
-  POCL_RETURN_ERROR_ON (((socket_fd = socket (AF_UNIX, SOCK_STREAM, 0)) == -1),
+    POCL_RETURN_ERROR_ON(((socket_fd = socket(AF_VSOCK, SOCK_STREAM, 0)) == -1),
                         CL_INVALID_DEVICE, "socket() returned errno: %i\n",
                         errno);
 
-  struct sockaddr_un server;
-  memset (&server, 0, sizeof (server));
-  server.sun_family = AF_UNIX;
-  strncpy (server.sun_path, "/tmp/pocl.socket", sizeof (server.sun_path) - 1);
-  addrlen = sizeof (server);
+    struct sockaddr_vm addr;
+    memset(&addr, 0, sizeof(struct sockaddr_vm));
+    addr.svm_family = AF_VSOCK;
+    addr.svm_port = port;
+    addr.svm_cid = cid;
+
+    POCL_RETURN_ERROR_ON((connect(socket_fd, (struct sockaddr *)&addr,
+                                  sizeof(struct sockaddr_vm)) == -1),
+                        CL_INVALID_DEVICE, "connect() returned errno: %i\n",
+                        errno);
+  } else {
+#ifdef USE_UDS
+
+    POCL_RETURN_ERROR_ON (((socket_fd = socket (AF_UNIX, SOCK_STREAM, 0)) == -1),
+                          CL_INVALID_DEVICE, "socket() returned errno: %i\n",
+                          errno);
+
+    struct sockaddr_un server;
+    memset (&server, 0, sizeof (server));
+    server.sun_family = AF_UNIX;
+    strncpy (server.sun_path, "/tmp/pocl.socket", sizeof (server.sun_path) - 1);
+    addrlen = sizeof (server);
 
 #else
 
-  struct addrinfo *ai;
-  struct sockaddr_storage server;
-  int err;
-  ai = pocl_resolve_address (data->address, port, &err);
-  if (err)
-    {
-      POCL_MSG_ERR ("Failed to resolve address: %s\n", gai_strerror (err));
+    struct addrinfo *ai;
+    struct sockaddr_storage server;
+    int err;
+    ai = pocl_resolve_address (data->address, port, &err);
+    if (err)
+      {
+        POCL_MSG_ERR ("Failed to resolve address: %s\n", gai_strerror (err));
+        return err;
+      }
+
+    memcpy (&server, ai->ai_addr, ai->ai_addrlen);
+    addrlen = ai->ai_addrlen;
+
+    POCL_RETURN_ERROR_ON (
+        ((socket_fd = socket (ai->ai_family, ai->ai_socktype, IPPROTO_TCP)) == -1),
+        CL_INVALID_DEVICE, "socket() returned errno: %i\n", errno);
+    freeaddrinfo (ai);
+
+    err = pocl_remote_client_set_socket_options (socket_fd, bufsize, is_fast);
+    if (err)
       return err;
-    }
-
-  memcpy (&server, ai->ai_addr, ai->ai_addrlen);
-  addrlen = ai->ai_addrlen;
-
-  POCL_RETURN_ERROR_ON (
-      ((socket_fd = socket (ai->ai_family, ai->ai_socktype, IPPROTO_TCP)) == -1),
-      CL_INVALID_DEVICE, "socket() returned errno: %i\n", errno);
-  freeaddrinfo (ai);
-
-  err = pocl_remote_client_set_socket_options (socket_fd, bufsize, is_fast);
-  if (err)
-    return err;
 #endif
 
-  POCL_RETURN_ERROR_ON (
-      (connect (socket_fd, (struct sockaddr *)&server, addrlen) == -1),
-      CL_INVALID_DEVICE, "connect() returned errno: %i\n", errno);
+    POCL_RETURN_ERROR_ON (
+        (connect (socket_fd, (struct sockaddr *)&server, addrlen) == -1),
+        CL_INVALID_DEVICE, "connect() returned errno: %i\n", errno);
+  }
 
   *fd = socket_fd;
 
