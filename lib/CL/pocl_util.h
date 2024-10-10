@@ -62,7 +62,7 @@ void pocl_install_sigfpe_handler ();
 void pocl_install_sigusr2_handler ();
 #if defined(__linux__) && defined(__x86_64__)
 POCL_EXPORT
-void pocl_ignore_sigfpe_for_thread (pthread_t thr);
+void pocl_ignore_sigfpe_for_thread (pocl_thread_t thr);
 #endif
 
 void bzero_s (void *v, size_t n);
@@ -316,10 +316,6 @@ POCL_EXPORT
 int pocl_run_command_capture_output (char *capture_string,
                                      size_t *captured_bytes,
                                      const char **args);
-
-uint16_t float_to_half (float value);
-
-float half_to_float (uint16_t value);
 
 void pocl_free_kernel_metadata (cl_program program, unsigned kernel_i);
 

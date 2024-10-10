@@ -88,7 +88,8 @@ endmacro()
 # don't allow implicit function declarations
 if(UNIX)
   if((CMAKE_C_COMPILER_ID STREQUAL "GNU") OR
-     (CMAKE_C_COMPILER_ID STREQUAL "Clang"))
+     (CMAKE_C_COMPILER_ID STREQUAL "Clang") OR
+      (CMAKE_C_COMPILER_ID STREQUAL "AppleClang"))
 
     check_c_compiler_flag("-Wincompatible-pointer-types" HAVE_WARN_INCOMPATIBLE_POINTER_TYPES)
     set(FORBID_IMPLICIT_FUNCTIONS "-Werror=implicit-function-declaration")
@@ -1043,11 +1044,12 @@ else()
 endif()
 
 if(ENABLE_HOST_CPU_DEVICES AND NOT ENABLE_CONFORMANCE)
-  pkg_check_modules(LIBJPEG_TURBO libjpeg-turbo>=3.0.0)
-  set(HAVE_LIBJPEG_TURBO ${LIBJPEG_TURBO_FOUND})
-  if(NOT ${HAVE_LIBJPEG_TURBO})
+  pkg_search_module(LIBJPEG_TURBO IMPORTED_TARGET
+    libjpeg-turbo>=3.0.0 libturbojpeg>=3.0.0)
+  if(NOT LIBJPEG_TURBO_FOUND)
     message(STATUS "libjpeg-turbo v3.0.0+ not found, disabled")
   endif()
+  set(HAVE_LIBJPEG_TURBO ${LIBJPEG_TURBO_FOUND})
 endif()
 ######################################################################################
 
@@ -1212,16 +1214,8 @@ if(HAVE_OPENCL_H)
   check_symbol_exists(CL_VERSION_1_2 ${OPENCL_H} HAVE_OPECL_1_2)
   if(HAVE_OPECL_3_0)
     set(OPENCL_HEADER_VERSION 300)
-  elseif(HAVE_OPECL_2_2)
-    set(OPENCL_HEADER_VERSION 220)
-  elseif(HAVE_OPECL_2_1)
-    set(OPENCL_HEADER_VERSION 210)
-  elseif(HAVE_OPECL_2_0)
-    set(OPENCL_HEADER_VERSION 200)
-  elseif(HAVE_OPECL_1_2)
-    set(OPENCL_HEADER_VERSION 120)
   else()
-    message(FATAL_ERROR "Couldn't find OpenCL header with version at least 1.2")
+    message(FATAL_ERROR "Couldn't find OpenCL header with version at least 3.0")
   endif()
 else()
   # PoCL's internal headers are OpenCL 3.0

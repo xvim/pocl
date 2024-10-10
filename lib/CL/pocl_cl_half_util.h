@@ -1,6 +1,8 @@
-/* OpenCLcontext.h - Header for dual-device Carla example
+/* cl_half_util.h - collection of helpful functions for manipulating cl_half
+   datatypes.
 
-   Copyright (c) 2022 Topi Leppänen / Tampere University
+   Copyright (c) 2017 Michal Babej / Tampere University of Technology
+                 2024 Robin Bijl / Tampere University
 
    Permission is hereby granted, free of charge, to any person obtaining a copy
    of this software and associated documentation files (the "Software"), to
@@ -21,26 +23,13 @@
    IN THE SOFTWARE.
 */
 
+#ifndef _CL_HALF_UTIL_H_
+#define _CL_HALF_UTIL_H_
 
-#pragma once
+#include <stdint.h>
 
-#define CL_USE_DEPRECATED_OPENCL_1_1_APIS
-#undef CL_HPP_ENABLE_EXCEPTIONS
+float pocl_half_to_float (uint16_t value);
 
-#include <memory>
-#include <mutex>
+uint16_t pocl_float_to_half (float value);
 
-class OpenCL_Context;
-
-class OpenCL_Manager
-{
-  bool isValid;
-  std::unique_ptr<OpenCL_Context> Context;
-
-public:
-  OpenCL_Manager ();
-  ~OpenCL_Manager ();
-
-  bool initialize (unsigned width, unsigned height, unsigned bpp = 32);
-  bool processCameraFrame (unsigned char *input, unsigned long *output);
-};
+#endif //_CL_HALF_UTIL_H_
